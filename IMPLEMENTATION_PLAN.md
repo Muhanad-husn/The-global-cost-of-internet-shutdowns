@@ -105,7 +105,14 @@ Scaffold is in place; Access Now snapshot loads via `load_access_now_snapshot()`
 
 ### Handoff notes
 
-_[Fill during execution: any country-name reconciliation surprises between Access Now / Top10VPN / WB / GADM, WB indicator codes if changed, GADM download URL.]_
+- **Top10VPN snapshot.** 169 rows × 7 cols at `data/processed/top10vpn_snapshot_2026-05-20.parquet`. Per-year counts: 2019=22, 2020=21, 2021=22, 2022=23, 2023=25, 2024=28, 2025=28. Schema: `country, iso3, year, cost_usd, duration_hours, users_affected, source`. Top-10 by total cost 2019–2025: Russia $37.5B, Myanmar $8.6B, India $6.0B, Venezuela $4.2B, Iraq $3.5B, Sudan $3.3B, Pakistan $3.0B, Iran $2.6B, Ethiopia $2.3B, Nigeria $1.6B (Top10VPN methodology — debated; surface caveat in every figure).
+- **Country-name reconciliation surprises.** `pycountry`'s bundled data uses **"Türkiye"** (no English "Turkey" alias) and **"Russian Federation"** (no "Russia" alias), so neither resolves via `.lookup()`. Both are pinned in `_TOP10VPN_ISO3_OVERRIDES` (TUR, RUS). Other overrides: `Congo DRC`/`DRC→COD`, `Republic of Congo→COG`, `eSwatini→SWZ`, `Pakistan - Azad Kashmir→PAK` (sub-national entry collapses to parent country for joining). **Somaliland** is intentionally left with `iso3=None` — it is a de-facto state with no ISO-3166 code, and the World Bank / GADM do not recognize it; mapping it to SOM would corrupt joins. Downstream (S4 cost join) needs to decide whether to display Somaliland's single 2022 row separately or drop it from country-level aggregates.
+- **Same overrides will be reusable in S3** when standardizing Access Now's `country` column to ISO-3 — `_country_to_iso3` in `data.py` is currently named with a leading underscore. Consider promoting it to public API in S3 or moving it to `clean.py`.
+- **World Bank indicators.** Defaults are `NY.GDP.MKTP.CD` (GDP current USD), `IT.NET.USER.ZS` (% internet users), `SP.POP.TOTL` (population). 5,586 rows = 261 countries × 7 years × 3 indicators in long form. 2025 rows are mostly NaN — WB hasn't reported current-year figures yet, which is expected and won't bite until S4's normalization step (use `min_periods` / forward-fill or just exclude 2025 from `cost_pct_gdp`). The v2 API returns aggregate rows (regions, income groups) with empty `countryiso3code`; these are dropped during load.
+- **WB cache.** `.cache/http_cache.sqlite` (~1.2 MB) populated on first call. Cache TTL is 30 days; force-refresh by deleting the sqlite file. WB Indicators codes are stable — no surprises against the plan's defaults.
+- **GADM.** Loader implemented but file **not fetched** (50 MB, gitignored). Smoke test `test_gadm_loads` skips when absent. Per the S5 plan, default-Plotly country layer is the path of least resistance and we may never need GADM; only fetch (`load_gadm_countries(fetch_if_missing=True)`) if S5/S6 require precise boundary geometry.
+- **`load_all()`** is the one-call convenience for notebooks — returns `{shutdowns, costs, wb}` (and `boundaries` only if GADM is on disk). S3's main notebook §1 should use this.
+- **No `data/cache/` directory.** Decision Log row 5 confirmed; cache is at `.cache/`. WB loader uses the shared `session` from `data.py` (no per-loader caches).
 
 ---
 
@@ -301,13 +308,15 @@ Track decisions made during execution that affect later sessions.
 | 3 | S1 | Snapshot persistence policy: cast all object columns to pandas `string` dtype before `to_parquet`. Reason: `duration` column contains mixed types (numeric hours alongside literal `"Curfew Style"` strings). | S3 must parse `duration` carefully — it's not numeric. |
 | 4 | S1 | `streamlit` consolidated into the `viz` extra (template had a separate `dashboard` extra). One install covers all viz + dashboard work. | Reproducibility check in S7 uses a single `pip install -e ".[viz,geo]"`. |
 | 5 | S1 | HTTP cache lives at `.cache/http_cache.sqlite` (template default), not `data/cache/` (mentioned in CLAUDE.md). | S2 World Bank loader points here. |
+| 6 | S2 | `pycountry` does **not** resolve common English names "Russia" or "Turkey" — bundled data uses "Russian Federation" and "Türkiye" with no short-name aliases. Both pinned in `_TOP10VPN_ISO3_OVERRIDES` (RUS, TUR). | S3 standardization needs the same override map for Access Now's `country` column; consider promoting `_country_to_iso3` to public API. |
+| 7 | S2 | **Somaliland** kept with `iso3=None` rather than collapsing to SOM. It is a de-facto state with no ISO-3166 code; WB and GADM do not recognize it, so a SOM map would corrupt joins. Single Top10VPN row affected (2022). | S4 cost join must decide: show Somaliland separately on the dashboard, or drop from country-level aggregates. |
 
 ## Progress Tracker
 
 | Session | Title | Status | Date | Notes |
 |---------|-------|--------|------|-------|
 | 1 | Scaffold + Access Now snapshot fetch | Complete | 2026-05-20 | 2102×47 snapshot from Combined sheet |
-| 2 | Data loaders + remaining snapshots | Not started | | |
+| 2 | Data loaders + remaining snapshots | Complete | 2026-05-20 | Top10VPN snapshot (169×7) + WB loader (5586×5, cached) + GADM helper (fetch on demand). 6 smoke tests pass, 1 skipped (GADM). |
 | 3 | Cleaning + dedup decision + duration imputation decision | Not started | | |
 | 4 | Cost join + WB normalize + country grouping + platform-block decisions | Not started | | |
 | 5 | Viz module + hero figure | Not started | | |
