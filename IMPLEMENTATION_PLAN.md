@@ -330,7 +330,21 @@ All upstream work done. This session is the "ship it" pass. Findings come from t
 
 ### Handoff notes
 
-_[Fill during execution: final run-time, any reproducibility surprises, things deferred to a v0.2.]_
+- **Robustness notebook shipped** at `notebooks/03_robustness.ipynb` (built via `notebooks/_scratch/build_03_robustness.py`, same pattern as `build_02_main.py`). Three sweeps:
+  1. **Dedup N ∈ {0,1,3,7}** — top-10 country set is **identical across all four N values** (rows collapsed: 199 / 251 / 341 / 438). The choice of N is *not* load-bearing for the headline ranking.
+  2. **Duration imputation across 5 strategies** — total shutdown-days span 13k–489k. Two top-10 families: `drop` ∩ `flag` = 10/10 (imputation-off), `hybrid` ∩ `snapshot_date` = 8/10 (imputation-on). **`hybrid` ∩ `drop` is only 4/10** — the most consequential sweep for the shutdown-days dashboard headline. Cost ranking unaffected (Top10VPN figures don't pass through our duration field).
+  3. **Country grouping (WB income / UN LDC / custom regional)** — within-subset Spearman ≈ +1.0; the framing changes *which countries are visible*, not their internal ordering. Headline-set overlap matches §8 exactly (5/10, 3/10, 5/10).
+- **README *Findings* populated** with 5 numeric findings, every cost statement tagged with the Top10VPN methodology caveat. Findings 1 (event-count trend) and 5 (cost coverage uneven) are new; 2–4 mirror existing decision-block diagnostics.
+- **README *Limitations* populated** — 6 entries, Top10VPN methodology debate listed first. Limitation #4 explicitly calls out the duration-imputation sensitivity discovered in robustness sweep #2 (a finding the original plan didn't anticipate).
+- **README run-time placeholder filled** with the actual 2 min 22 s end-to-end (pytest 21.9 s + `02_main.ipynb` 71.4 s + `03_robustness.ipynb` 48.5 s + dashboard health-check ~5 s).
+- **Smoke test count: 12 pass / 1 skip** (up from 10/1). New tests: `test_analytic_dataset_end_to_end` (pins the S5+ contract — columns + headline cost top-10) and `test_dashboard_module_imports` (imports `app/streamlit_dashboard.py` end-to-end; catches schema-mismatch + helper-rename errors at module scope).
+- **REPRODUCIBILITY.md shipped** documenting the existing-env check. Per S7 plan choice, this is *not* a fresh `pip install` — the env was pre-installed. Documented as a known coverage gap.
+- **Duration sensitivity is a stronger finding than the README originally anticipated.** The `hybrid` ∩ `drop` = 4/10 overlap is buried inside the robustness notebook. The README's Limitation #4 names it; the dashboard's caption could surface it more prominently in a v0.2 polish pass.
+- **What was *not* done:**
+  - **Fresh-env install.** The repro check ran in the already-installed `portfolio` env. Dependency-spec drift would not be caught.
+  - **GADM smoke-test enable.** Still skipped; the 50 MB polygon file is fetch-on-demand and the Plotly built-in layer covers the choropleth.
+  - **Snapshot revision diagnostic** (§10 of `02_main.ipynb`). Structurally untestable until a second dated snapshot exists.
+  - **No `v0.1.0` tag** — left for the user to apply when they're ready to publish.
 
 ---
 
@@ -371,4 +385,4 @@ Track decisions made during execution that affect later sessions.
 | 4 | Cost join + WB normalize + country grouping + platform-block decisions | Complete | 2026-05-20 | analytic_dataset_2026-05-20.parquet (1511×66) + 4 decision blocks (cost source, country grouping, platform-block treatment, snapshot pinning); README rows 3–6 populated; 9 tests pass, 1 skipped. |
 | 5 | Viz module + hero figure | Complete | 2026-05-20 | viz.py (3 helpers + display_country + save_figure) + rollups.py + §12 + hero.png (800×800, caveat in title). 10 tests pass, 1 skipped. |
 | 6 | Streamlit dashboard | Complete | 2026-05-20 | app/streamlit_dashboard.py (4 tabs, persistent caveat banner) + figures/dashboard_screenshot.png via Playwright. README "How to reproduce" updated. |
-| 7 | README fill-in + smoke tests + robustness notebook + reproducibility | Not started | | |
+| 7 | README fill-in + smoke tests + robustness notebook + reproducibility | Complete | 2026-05-20 | 03_robustness.ipynb (3 sweeps) + README Findings/Limitations + REPRODUCIBILITY.md (~2 min 22 s end-to-end). 12 tests pass, 1 skipped. |

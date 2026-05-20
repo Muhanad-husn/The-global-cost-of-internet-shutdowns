@@ -40,11 +40,103 @@ Each major data-processing decision was made by **diagnostic first, choice secon
 
 ## Findings
 
-*To be filled during implementation. Each finding will be a falsifiable statement anchored in a specific number from the analysis (e.g., "Country X imposed Y total shutdown-days 2019–latest, with estimated cost Z USD per Top10VPN methodology"). Cost figures are **reported, not endorsed** — every cost finding is tagged with the methodology caveat.*
+All numbers below come from the pinned 2026-05-20 snapshots and the analytic
+dataset at `data/processed/analytic_dataset_2026-05-20.parquet` (1,511 events,
+2019–2025, post-dedup at N=0 with hybrid duration imputation).
+
+1. **The phenomenon is growing, not just being better reported.** Annual
+   event counts rise from **213 in 2019 to 247 in 2025**, with a structural
+   step up after 2022 (172 → 240 → 253 → 247). The 2025 figure is a
+   partial-year snapshot (cut 2026-05-20) — the trend is conservative.
+
+2. **Concentration is severe.** The top 10 countries by total estimated cost
+   account for **$72.0B of the $78.2B global total** (≈ 92%) over 2019–2025
+   *per Top10VPN methodology*. Headline ranking (cost USD, debated): **Russia
+   $37.5B, Myanmar $8.6B, India $6.0B, Venezuela $4.2B, Iraq $3.5B, Sudan
+   $3.3B, Pakistan $3.0B, Iran $2.5B, Ethiopia $1.9B, Nigeria $1.6B**.
+
+3. **The "shutdown" headline is mostly *not* full blackouts.** Of the 131,500
+   total shutdown-days in the cleaned dataset, only **18,355 days (14%) are
+   full blackouts**; **109,808 days (84%) are platform-specific blocks**
+   (Twitter/X, WhatsApp, Facebook, etc.) and **3,337 days (3%) are
+   throttling**. In the top-affected countries this skew is extreme: Iran is
+   **96.7% non-blackout**, Russia **99.5%**, Türkiye **100%**. The country
+   ranking by combined shutdown-days masks a substantively different
+   underlying mix.
+
+4. **LMIC concentration is real but framing-sensitive.** Using **WB income
+   group** as the LMIC frame, **5/10** of the headline-cost countries are
+   low-or-lower-middle income (India, Myanmar, Sudan, Pakistan, Nigeria);
+   under **UN LDC**, **3/10** (Myanmar, Sudan, Ethiopia). The frames agree on
+   the *ordering* of their shared countries (Spearman ≈ +1.0) but disagree
+   on which upper-middle entries (Russia, Iran, Türkiye) belong. The
+   dashboard exposes all three frames; the README uses WB income group as
+   primary precisely so the LMIC concentration emerges from the data rather
+   than being imposed by exclusion.
+
+5. **Cost coverage is uneven across the registry.** Top10VPN reports
+   country-year costs for **64 countries**; Access Now records events in
+   **90**. The cost rollup covers **86.4%** of cleaned events (1,305 / 1,511)
+   — meaningful for the top-10 ranking, but a quarter of the affected
+   countries (AGO, BHR, CAF, CHN, GBR, ISR, KHM, LAO, MWI, MYS, SAU, UKR,
+   USA, …) appear on the event map without a cost number attached.
+
+*Every cost figure is reported under the Top10VPN methodology and inherits
+the limitations described below — see also `notebooks/03_robustness.ipynb`
+for the dedup-N, duration-imputation, and country-grouping sensitivity
+sweeps.*
 
 ## Limitations
 
-*To be filled during implementation. Expected categories: **Top10VPN's cost methodology is contested** — the figures here are reported under that methodology, not validated independently; Access Now's registry depends on what gets reported, so authoritarian-state shutdowns with no press coverage are systematically under-counted; "shutdown" definitions vary across sources (full blackout vs. throttle vs. platform-block); World Bank macro figures have their own data-quality issues in low-resource settings; the trend in shutdown counts is partly a trend in reporting infrastructure, not only in events.*
+1. **Top10VPN's cost methodology is contested — these are reported figures,
+   not validated estimates.** The formula `cost ≈ GDP × digital-economy
+   contribution × shutdown duration × affected-population fraction` is a
+   descendant of Brookings (West, 2016) and is applied uniformly across
+   countries. Critics in development economics argue it **overstates**
+   impact in cash-economy / informal-sector-dominated contexts where a
+   meaningful share of economic activity doesn't depend on internet
+   connectivity. Others argue it **understates** by missing indirect
+   effects (on civic mobilization, on supply-chain coordination, on
+   remittance flows). The debate is real and is not resolved by the data.
+   The portfolio reports Top10VPN's numbers because there is no comparable
+   alternative with the same breadth, *not* because we endorse them. Treat
+   every cost figure here as a *reported, debated input.*
+
+2. **Access Now's registry is reported-and-curated.** Authoritarian-state
+   shutdowns with no independent press coverage are systematically
+   under-counted. The trend in shutdown counts is partly a trend in
+   reporting infrastructure — KeepItOn's coalition has grown over time,
+   pulling more events into the registry. Year-over-year growth in counts
+   should not be read as purely a growth in shutdowns.
+
+3. **"Shutdown" definitions vary across sources and bucket choice matters.**
+   Access Now distinguishes full blackouts, throttling, and platform-blocks;
+   Top10VPN aggregates at the country-year level without that distinction.
+   The "Combined" headline view matches Top10VPN's granularity but masks
+   that ~84% of shutdown-days are platform-specific blocks rather than full
+   blackouts (Finding 3). The dashboard's country drill-down exposes the
+   bucket split; the README headline does not.
+
+4. **Duration imputation materially shapes the shutdown-days ranking.** The
+   chosen `hybrid` strategy imputes the snapshot date as the end for events
+   the registry marks `Ongoing`. This surfaces long-running cases like Iran
+   (since 2009) and Turkey (since 2013). An imputation-off strategy would
+   produce a different top-10 — see `03_robustness.ipynb`. **The cost
+   ranking is unaffected** (cost numbers come from Top10VPN, not our
+   durations), but the shutdown-days ranking is.
+
+5. **World Bank macro figures have their own data-quality issues.** GDP and
+   internet-penetration figures for low-resource settings are estimated,
+   revised over time, and patchy in 2025 (current-year figures are not yet
+   reported). The `cost_pct_gdp` and `cost_per_internet_user` derived
+   columns inherit this — they are scaffolding for context, not precise
+   measurements.
+
+6. **Both upstream sources revise prior years.** Pinning dated snapshots
+   (Decision Log #15) decouples reproducibility from this churn, but the
+   numbers in this README reflect what was visible to the 2026-05-20 pull.
+   A future re-snapshot will produce a cross-snapshot revision diagnostic
+   (placeholder in `02_main.ipynb` §10).
 
 ## Visual style
 
@@ -70,7 +162,7 @@ The dashboard ships as the headline interactive deliverable: a persistent method
 
 ![Dashboard screenshot](figures/dashboard_screenshot.png)
 
-Full run time: ~X minutes (most data is cached after first run via `requests-cache`; pinned snapshots are committed).
+Full run time: **~2 min 22 s** end-to-end on the `portfolio` conda env (pytest + `02_main.ipynb` + `03_robustness.ipynb` + dashboard health-check; see `REPRODUCIBILITY.md`). Most data is cached after first run via `requests-cache`; pinned snapshots are committed.
 
 ## Files
 

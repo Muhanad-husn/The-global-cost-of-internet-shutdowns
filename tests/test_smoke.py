@@ -205,6 +205,69 @@ def test_top10_bar_renders_with_caveat():
     assert len(fig.data[0].y) == 10
 
 
+def test_analytic_dataset_end_to_end():
+    """The shipped analytic dataset has the contract S5+ depends on.
+
+    Per Decision Log #17, S5 (viz) and S6 (dashboard) read this parquet
+    rather than re-running ``clean.py``. The smoke test pins the contract:
+    expected columns are present, row count is in range, and the rollups
+    produce a Top10VPN top-10 that contains the headline countries.
+    """
+    import pandas as pd
+    import pytest
+
+    from internet_shutdowns.data import PROCESSED_DIR
+    from internet_shutdowns.rollups import country_cost_rollup
+
+    analytic = PROCESSED_DIR / "analytic_dataset_2026-05-20.parquet"
+    if not analytic.exists():
+        pytest.skip(f"analytic dataset not built — expected {analytic}")
+
+    df = pd.read_parquet(analytic)
+    assert 1000 < len(df) < 3000, f"unexpected row count: {len(df)}"
+
+    expected = {
+        "country", "iso3", "year", "start_date", "type", "platform_block",
+        "duration_days", "duration_imputed", "cost_usd", "gdp_usd",
+        "internet_pct", "population",
+    }
+    missing = expected - set(df.columns)
+    assert not missing, f"analytic dataset missing columns: {missing}"
+
+    # Cost rollup must dedupe (iso3, year) before summing — naive .sum() would
+    # over-count by event multiplicity (Decision Log #19). The headline-cost
+    # top-10 from S4/S5 must remain stable.
+    cost = country_cost_rollup(df).dropna(subset=["total_cost_usd"])
+    headline = set(cost.head(10)["iso3"])
+    expected_headline = {"RUS", "MMR", "IND", "VEN", "IRQ", "SDN", "PAK", "IRN", "ETH", "NGA"}
+    assert headline == expected_headline, (
+        f"headline cost top-10 has drifted: {sorted(headline)} "
+        f"vs. {sorted(expected_headline)}"
+    )
+
+
+def test_dashboard_module_imports():
+    """The Streamlit dashboard module imports without executing the app.
+
+    Streamlit apps don't lend themselves to running-server smoke tests, but
+    an import-time error (typo, missing helper, schema-mismatch in a helper
+    call evaluated at module scope) would still surface here.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    app_path = Path(__file__).resolve().parents[1] / "app" / "streamlit_dashboard.py"
+    assert app_path.exists(), f"dashboard module not found at {app_path}"
+
+    spec = importlib.util.spec_from_file_location("streamlit_dashboard", app_path)
+    module = importlib.util.module_from_spec(spec)
+    # Streamlit calls during module execution are no-ops without a running
+    # server; the heavy lifting is data-load + viz, which must succeed here.
+    spec.loader.exec_module(module)
+    # load_analytic is the data-contract surface for the dashboard.
+    assert hasattr(module, "load_analytic")
+
+
 def test_gadm_loads():
     """GADM admin-0 polygons load — skipped if the (~50 MB) file isn't fetched."""
     import pytest
