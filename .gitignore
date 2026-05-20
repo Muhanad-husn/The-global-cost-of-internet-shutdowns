@@ -31,3 +31,19 @@ Thumbs.db
 # Env
 .env
 secrets.toml
+
+# AI assistants / planning artifacts (keep AI-using patterns untracked)
+CLAUDE.md
+AGENTS.md
+.claude/
+.claude-*
+.cursor/
+.cursorrules
+.aider*
+.continue/
+.windsurfrules
+.github/copilot-*
+IMPLEMENTATION_PLAN.md
+PORTFOLIO_PLAN.md
+*_PLAN.md
+memory/
