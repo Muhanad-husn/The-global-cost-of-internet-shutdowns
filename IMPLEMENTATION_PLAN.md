@@ -60,7 +60,16 @@ Only `CLAUDE.md` and `README.md` exist at the project root. The sibling `_templa
 
 ### Handoff notes
 
-_[Fill during execution: actual column names in Access Now data, any surprises in the registry format, row count of snapshot.]_
+- **Access Now snapshot source.** The KeepItOn STOP dataset is published as a Google Sheet via `https://www.accessnow.org/keepiton-data-spreadsheet` → `docs.google.com/spreadsheets/d/1DvPAuHNLp5BXGb0nnZDGNoiIwEeu2ogdXEIDvT4Hyfk`. XLSX export (`/export?format=xlsx`) works without auth.
+- **Sheet to use is "Combined (2016-2025)"**, not the per-year sheets. The per-year sheets each include "ongoing since" events from earlier years (e.g. Iran 2009, Turkey 2013 appear in every annual sheet), so concatenating them creates massive duplication. The Combined sheet has 47 cols including a `count_year` attribution column the per-year sheets don't have.
+- **Snapshot stats.** 2,102 rows × 47 cols, 0.6 MB parquet. Per `count_year`: 2016=80, 2017=113, 2018=205, 2019=224, 2020=171, 2021=197, 2022=206, 2023=289, 2024=304, 2025=313. Project scope (2019+) is 1,704 rows.
+- **Schema notes for Session 3.** Core columns: `country`, `start_date`, `end_date`, `shutdown_type`, `shutdown_status`, `duration`, `geo_scope`, `area_name`, `affected_network`, `shutdown_extent`, `actual_cause`, `gov_justification`, `event`, `an_link`, `region`, `count_year`. Date columns coerced to datetime (2 unparseable `end_date` values → NaT; "ongoing" status lives in `shutdown_status` ∈ {"Ongoing", ...}, not in `end_date`). All other object columns cast to pandas `string` dtype for parquet stability — that includes `duration`, which contains the literal string `"Curfew Style"` alongside numeric-hours strings (so don't blindly cast to int/float in cleaning).
+- **`shutdown_type` distribution (raw).** `Shutdown` 1913, `Shutdown, Throttle` 123, `Throttle` 63, `Unknown` 3. NB: there is no separate "platform_block" type — platform-specific blocks are encoded via the `*_affected` columns (`facebook_affected`, `twitter_affected`, ...). The CLAUDE.md/plan assumption of three categories (full / throttle / platform_block) needs rewording in S3's `standardize_event_columns`: type is currently {Shutdown, Shutdown+Throttle, Throttle, Unknown} and "platform block" is a *derived* flag from the per-platform columns. Log this as a decision input for S3.
+- **`.gitignore` gotcha resolved.** Directory-level `data/raw/` ignore prevented `!data/raw/top10vpn_*.csv` re-include; switched to `data/raw/*` + negation. Same fix applied to `notebooks/_scratch/*` so the .py exploration scripts are properly excluded while `.gitkeep` is tracked.
+- **`.cache/` vs `data/cache/`.** Template's `data.py` puts the HTTP cache at `.cache/` (project root); CLAUDE.md mentioned `data/cache/`. Both are gitignored. S2 should use the template's location (`.cache/http_cache.sqlite`) to avoid divergence.
+- **Streamlit dep.** Added to `viz` extras (S6 needs it). Template kept `streamlit` in a separate `dashboard` extra; flattened into `viz` so a single `pip install -e ".[viz,geo]"` covers everything in this project.
+- **`pycountry` dep added** to project deps (S2 will need it for ISO-3 reconciliation across sources).
+- **Scratch scripts.** `notebooks/_scratch/{fetch_access_now,inspect_access_now,snapshot_access_now}.py` are gitignored but useful if the snapshot ever needs to be regenerated. Don't delete them locally.
 
 ---
 
@@ -287,13 +296,17 @@ Track decisions made during execution that affect later sessions.
 
 | # | Session | Decision | Affects |
 |---|---------|----------|---------|
-|   |         |          |         |
+| 1 | S1 | Use **Access Now's curated "Combined (2016-2025)" sheet** as the snapshot source, not per-year sheets. Per-year sheets duplicate "ongoing since" events from earlier years (~6 dupes per sheet across 2016–2025 = ~60 false dupes). Combined sheet adds a `count_year` attribution column. | S3 dedup work starts from a cleaner base; reduces the "false-merge rate" baseline. |
+| 2 | S1 | `shutdown_type` in raw data is `{Shutdown, Shutdown+Throttle, Throttle, Unknown}` — there is **no native "platform_block" type**. Platform-specific blocks must be **derived** in S3's `standardize_event_columns` from the `*_affected` columns (facebook_affected, twitter_affected, ...). | S3 type taxonomy; S4 platform-block decision block. |
+| 3 | S1 | Snapshot persistence policy: cast all object columns to pandas `string` dtype before `to_parquet`. Reason: `duration` column contains mixed types (numeric hours alongside literal `"Curfew Style"` strings). | S3 must parse `duration` carefully — it's not numeric. |
+| 4 | S1 | `streamlit` consolidated into the `viz` extra (template had a separate `dashboard` extra). One install covers all viz + dashboard work. | Reproducibility check in S7 uses a single `pip install -e ".[viz,geo]"`. |
+| 5 | S1 | HTTP cache lives at `.cache/http_cache.sqlite` (template default), not `data/cache/` (mentioned in CLAUDE.md). | S2 World Bank loader points here. |
 
 ## Progress Tracker
 
 | Session | Title | Status | Date | Notes |
 |---------|-------|--------|------|-------|
-| 1 | Scaffold + Access Now snapshot fetch | Not started | | |
+| 1 | Scaffold + Access Now snapshot fetch | Complete | 2026-05-20 | 2102×47 snapshot from Combined sheet |
 | 2 | Data loaders + remaining snapshots | Not started | | |
 | 3 | Cleaning + dedup decision + duration imputation decision | Not started | | |
 | 4 | Cost join + WB normalize + country grouping + platform-block decisions | Not started | | |

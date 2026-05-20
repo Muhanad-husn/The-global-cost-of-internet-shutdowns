@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.eggs/
+build/
+dist/
+
+# Notebooks
+.ipynb_checkpoints/
+notebooks/_scratch/*
+!notebooks/_scratch/.gitkeep
+
+# Data: raw is re-fetchable / often large; processed snapshots ARE tracked.
+# Top10VPN per-year CSVs are hand-transcribed (small, not refetchable), so commit those.
+data/raw/*
+!data/raw/top10vpn_*.csv
+data/external/
+
+# HTTP cache (requests-cache sqlite)
+.cache/
+data/cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env
+.env
+secrets.toml
