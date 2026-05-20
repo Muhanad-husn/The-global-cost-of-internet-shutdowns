@@ -94,6 +94,90 @@ def test_worldbank_cached_call_returns_data():
     assert usa_2020["value"].iloc[0] > 1e13  # US GDP is ~$21T
 
 
+def test_standardize_event_columns_shapes_frame():
+    """standardize_event_columns adds canonical columns and splits multi-country rows."""
+    from internet_shutdowns.clean import standardize_event_columns
+    from internet_shutdowns.data import load_access_now_snapshot
+
+    raw = load_access_now_snapshot()
+    std = standardize_event_columns(raw)
+
+    # Multi-country rows ("Cameroon; Central African Republic") split → row count grows.
+    assert len(std) >= len(raw)
+    for col in ("iso3", "type", "duration_hours", "platform_block", "platforms_affected"):
+        assert col in std.columns, f"missing standardized column: {col}"
+
+    # Type is the ordered categorical from the mapping; the headline values are present.
+    assert set(std["type"].dropna().unique()).issubset({"full_blackout", "throttle", "other"})
+
+    # No country-name should be ;-joined any more.
+    assert not std["country"].astype("string").str.contains(";", na=False).any()
+
+    # iso3 unresolved should be only Somaliland (per Decision Log #7 — kept as None).
+    unresolved = set(std.loc[std["iso3"].isna(), "country"].unique())
+    assert unresolved == {"Somaliland"}, f"unexpected unresolved countries: {unresolved}"
+
+
+def test_dedupe_collapses_known_duplicates():
+    """dedupe_events collapses the Ethiopia 2020-11-04 Tigray cluster (6 dup rows → 1)."""
+    from internet_shutdowns.clean import dedupe_events, standardize_event_columns
+    from internet_shutdowns.data import load_access_now_snapshot
+
+    std = standardize_event_columns(load_access_now_snapshot())
+    in_scope = std[std["count_year"] >= 2019].copy()
+
+    before = len(in_scope)
+    deduped = dedupe_events(in_scope, days_tolerance=0)
+    after = len(deduped)
+
+    # The conservative N=0 dedup collapses well over 100 rows in the 2019+ subset.
+    assert after < before
+    assert (before - after) > 100, f"only collapsed {before - after} rows"
+
+    # The Ethiopia 2020-11-04 Tigray cluster (7 raw rows; 6 are duplicates of one event
+    # and 1 is the distinct Wellega event) should collapse to exactly 2 events.
+    tigray_cluster = deduped[
+        (deduped["country"] == "Ethiopia")
+        & (deduped["start_date"] == "2020-11-04")
+        & (deduped["type"] == "full_blackout")
+    ]
+    assert len(tigray_cluster) == 2, (
+        f"expected 2 distinct Ethiopia 2020-11-04 events (Tigray + Wellega), "
+        f"got {len(tigray_cluster)}"
+    )
+
+
+def test_compute_duration_handles_missing_end_date():
+    """compute_duration in 'hybrid' mode covers most rows and never goes negative."""
+    from internet_shutdowns.clean import (
+        compute_duration,
+        dedupe_events,
+        standardize_event_columns,
+    )
+    from internet_shutdowns.data import load_access_now_snapshot
+
+    std = standardize_event_columns(load_access_now_snapshot())
+    in_scope = std[std["count_year"] >= 2019].copy()
+    deduped = dedupe_events(in_scope, days_tolerance=0)
+
+    with_dur = compute_duration(deduped, missing_strategy="hybrid")
+    for col in ("duration_days", "duration_source", "duration_imputed"):
+        assert col in with_dur.columns
+
+    days = with_dur["duration_days"].astype("Float64")
+    # No negative durations after the sanity guard against bad raw values.
+    assert (days.dropna() >= 0).all()
+    # Hybrid recovers most rows (recorded + duration_field + snapshot_date for Ongoing).
+    coverage = days.notna().mean()
+    assert coverage > 0.75, f"hybrid coverage too low: {coverage:.0%}"
+
+    # The two sentinel-strategy extremes should bracket hybrid in total shutdown-days.
+    drop_total = compute_duration(deduped, missing_strategy="drop")["duration_days"].astype("Float64").sum()
+    snap_total = compute_duration(deduped, missing_strategy="snapshot_date")["duration_days"].astype("Float64").sum()
+    hybrid_total = days.sum()
+    assert drop_total < hybrid_total < snap_total
+
+
 def test_gadm_loads():
     """GADM admin-0 polygons load — skipped if the (~50 MB) file isn't fetched."""
     import pytest

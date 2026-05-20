@@ -148,7 +148,17 @@ Loaders work. Now do the lab work. CLAUDE.md explains both decisions in detail: 
 
 ### Handoff notes
 
-_[Fill during execution: chosen N for dedup, chosen duration imputation strategy, row count before/after dedup, fraction of events with imputed duration.]_
+- **`clean.py` shipped** with three public functions plus `resolve_iso3` helper. `standardize_event_columns` is *additive* — it leaves all 47 raw columns intact and adds {`iso3`, `type`, `duration_hours`, `platform_block`, `platforms_affected`}. S4 can rely on either the raw or the canonical names.
+- **Country resolution.** `resolve_iso3` is `_country_to_iso3` + parenthetical-strip fallback. Covers all 92 in-scope countries except **Somaliland** (intentionally None — same policy as Top10VPN in `data.py`). The three multi-country rows (`"Cameroon; Central African Republic"`, etc.) are split row-wise inside `standardize_event_columns`; raw `len(df)=2102` → standardized `len=2108`.
+- **Type mapping.** `{Shutdown, "Shutdown, Throttle"} → full_blackout`, `Throttle → throttle`, `Unknown → other`. Combined "Shutdown+Throttle" is folded into `full_blackout` because the blackout is the load-bearing event; throttle co-occurrence shows up via the raw `shutdown_type` if needed. Decision Log #2 satisfied: `platform_block` is a derived bool (from `shutdown_extent contains "Service-based"` OR any `*_affected=="Yes"`), not a `type` value.
+- **Duration column gotcha (new).** Raw `duration` contains some Excel-date-shaped garbage (e.g. `"-44270"` — that's a negative Excel serial for ~2021). `_coerce_duration_hours` nulls anything `< 0` or `> 175200` (20 years). Without this guard, `compute_duration` returned -1854-day values. ~37 raw values in the in-scope subset get nulled. Document under `duration_source="duration_field"` if anything sneaks through.
+- **Dedup chosen N=0.** ~200 rows collapse in 2019+. Cluster key is `(iso3, type, normalized area_name)`, so Ethiopia/Tigray vs. Ethiopia/Wellega on the same day remain distinct. `dedupe_events` keeps the most-populated row per cluster (max non-null count).
+- **Recorded end_date < start_date.** 3 rows in the post-dedup in-scope subset have `end_date < start_date` (data-entry error). `compute_duration` treats these as "no usable end_date" and falls through to the hybrid logic. Surfaced via `duration_source` flag, not silently clipped to zero.
+- **Hybrid duration coverage.** Post-dedup in-scope = 1,511 rows. Hybrid populates 1,224 (recorded=1,142, snapshot_date=81, duration_field=1, missing=287). The 287 "missing" rows carry `duration_imputed=True` with NaN — S4's cost rollup will need a default treatment.
+- **Pre-cost-join top-10 by total shutdown-days (hybrid).** Ethiopia, India, Iran, Myanmar, Pakistan, Russian Federation, Türkiye, Ukraine, Yemen, Tigray-included long-runners. The Iran 2009 / Turkey 2013 ongoing-since events drive the long tail (~17 years each). Verify against Top10VPN's ordering in S4.
+- **Notebook builder pattern.** `notebooks/_scratch/build_02_main.py` constructs the .ipynb via `nbformat`; execute with `jupyter nbconvert --execute --inplace`. Reuse this pattern in S4 — add S4 cells to the same builder (or a new `build_02_main_s4.py` that loads the existing notebook and appends).
+- **README decisions table rows 1 & 2 populated.** Rows 3–6 still placeholders for S4 / S5.
+- **Tests added (3): 9 pass, 1 skip (GADM).** Suite runtime ~18 s.
 
 ---
 
@@ -310,6 +320,10 @@ Track decisions made during execution that affect later sessions.
 | 5 | S1 | HTTP cache lives at `.cache/http_cache.sqlite` (template default), not `data/cache/` (mentioned in CLAUDE.md). | S2 World Bank loader points here. |
 | 6 | S2 | `pycountry` does **not** resolve common English names "Russia" or "Turkey" — bundled data uses "Russian Federation" and "Türkiye" with no short-name aliases. Both pinned in `_TOP10VPN_ISO3_OVERRIDES` (RUS, TUR). | S3 standardization needs the same override map for Access Now's `country` column; consider promoting `_country_to_iso3` to public API. |
 | 7 | S2 | **Somaliland** kept with `iso3=None` rather than collapsing to SOM. It is a de-facto state with no ISO-3166 code; WB and GADM do not recognize it, so a SOM map would corrupt joins. Single Top10VPN row affected (2022). | S4 cost join must decide: show Somaliland separately on the dashboard, or drop from country-level aggregates. |
+| 8 | S3 | Dedup cluster key is `(iso3, type, normalized area_name)`, `days_tolerance=0`. Same-day exact-key collapse only. Higher N risks merging co-located escalations and regional reignitions. | S4/S5 inherit this. Sensitivity to N is in `03_robustness.ipynb` (S7). |
+| 9 | S3 | Raw `duration` column has Excel-date-shaped garbage (e.g. `"-44270"`). `_coerce_duration_hours` nulls values `< 0` or `> 175200` (20 years). ~37 in-scope values affected. | If future snapshots have a different garbage pattern, revisit this cap. |
+| 10 | S3 | Duration imputation = **hybrid** strategy: recorded → `duration_hours` → snapshot-date-if-Ongoing → NaN+flag for Unknown. Pure strategies span 13k–489k total shutdown-days; hybrid sits at ~130k. | S4 cost rollup multiplies through these durations; `duration_imputed=True` rows need a documented treatment in the cost join. |
+| 11 | S3 | `type` value mapping: `Shutdown` and `Shutdown, Throttle` both → `full_blackout`. `Throttle` alone → `throttle`. `Unknown` → `other`. | S4 platform-block decision block can still split out "combined throttle+blackout" via the raw `shutdown_type` column, which is preserved. |
 
 ## Progress Tracker
 
@@ -317,7 +331,7 @@ Track decisions made during execution that affect later sessions.
 |---------|-------|--------|------|-------|
 | 1 | Scaffold + Access Now snapshot fetch | Complete | 2026-05-20 | 2102×47 snapshot from Combined sheet |
 | 2 | Data loaders + remaining snapshots | Complete | 2026-05-20 | Top10VPN snapshot (169×7) + WB loader (5586×5, cached) + GADM helper (fetch on demand). 6 smoke tests pass, 1 skipped (GADM). |
-| 3 | Cleaning + dedup decision + duration imputation decision | Not started | | |
+| 3 | Cleaning + dedup decision + duration imputation decision | Complete | 2026-05-20 | clean.py (3 fns + resolve_iso3); 02_main.ipynb §§1–4 with two five-part blocks; 3 new tests (9 pass, 1 skip); README rows 1–2 populated. |
 | 4 | Cost join + WB normalize + country grouping + platform-block decisions | Not started | | |
 | 5 | Viz module + hero figure | Not started | | |
 | 6 | Streamlit dashboard | Not started | | |
