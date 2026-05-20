@@ -1,0 +1,302 @@
+# Internet Shutdowns — Multi-Session Implementation Plan
+
+> **Created:** 2026-05-20
+> **Source plan:** `CLAUDE.md` + `README.md` (project root)
+> **Total sessions:** 7
+> **Estimated total effort:** 7 sessions (1 conversation each)
+
+## Overview
+
+Build a descriptive cartographic + time-series analysis of internet shutdowns 2019–latest using Access Now's #KeepItOn registry, Top10VPN's contested cost figures, World Bank macro indicators, and GADM boundaries. Headline deliverable is an interactive Plotly/Streamlit dashboard; portfolio signal is six load-bearing data-processing decisions documented in five-part form inline in the main notebook. The Top10VPN methodology-debate caveat is surfaced throughout — cost figures are reported, never endorsed.
+
+## Session Dependency Graph
+
+```
+S1 (scaffold + Access Now snapshot)
+  └─ S2 (Top10VPN ingest + WB API + GADM loaders)
+       └─ S3 (clean.py + dedup + duration decisions)
+            └─ S4 (cost join + WB normalize + grouping + platform-block decisions)
+                 └─ S5 (viz module + hero figure)
+                      ├─ S6 (Streamlit dashboard)
+                      └─ S7 (README fill-in + smoke tests + reproducibility + robustness notebook)
+```
+
+S6 and S7 are independent and can be done in either order after S5.
+
+---
+
+## Session 1: Scaffold + Access Now snapshot fetch
+
+**Objective:** Stand up the project skeleton from `_template/` and commit the first dated snapshot of the Access Now #KeepItOn registry.
+**Inputs:** `D:\github-ds-portfolio\_template\` (canonical scaffold), `CLAUDE.md`, `README.md`.
+**Outputs:** `pyproject.toml`, `src/internet_shutdowns/{__init__,data,clean,viz,diagnostics}.py`, `tests/test_smoke.py`, `notebooks/NOTEBOOK_STRUCTURE.md`, `notebooks/_scratch/`, `app/`, `data/{raw,processed}/`, `figures/`, `.gitignore`, `data/processed/access_now_snapshot_2026-05-20.parquet`.
+**Depends on:** None.
+
+### Context for resumption
+
+Only `CLAUDE.md` and `README.md` exist at the project root. The sibling `_template/` directory is the canonical scaffold (pyproject with viz/geo/nlp/llm/ml extras already declared, `src/project_name/{data,diagnostics,viz}.py` stubs, `tests/test_smoke.py`, `notebooks/NOTEBOOK_STRUCTURE.md` documenting the five-part decision block). Conda env is `portfolio` (Python 3.14.4). Access Now publishes the #KeepItOn registry as a Google Sheet / form download; today's date 2026-05-20 is the snapshot pin.
+
+### Steps
+
+1. Copy `_template/` contents to the project root, renaming `src/project_name/` → `src/internet_shutdowns/`. Skip `_template/README.md` (project already has one).
+2. Update `pyproject.toml`: project name `internet-shutdowns`, description from `CLAUDE.md`, add `streamlit>=1.32` to viz extras, confirm `requests-cache`, `pyarrow`, `pandas`, `plotly`, `kaleido`, `geopandas` are present (they are in template — verify).
+3. Replace `src/internet_shutdowns/__init__.py` stub with a one-line package docstring referencing the project's purpose.
+4. Create `notebooks/_scratch/` (gitkeep) and `app/` (placeholder `streamlit_dashboard.py` with a `# TODO: implemented in Session 6` comment).
+5. Write `.gitignore` covering `data/raw/`, `data/cache/` (requests-cache sqlite), `__pycache__/`, `.ipynb_checkpoints/`, `notebooks/_scratch/*.ipynb`, `*.egg-info/`, `.venv/`. Keep `data/processed/` tracked.
+6. `pip install -e ".[viz,geo]"` inside the `portfolio` conda env. Verify import: `python -c "import internet_shutdowns; import plotly; import geopandas"`.
+7. **Access Now fetch.** Locate the current public download for the #KeepItOn registry (the site links to a Google Sheet / CSV). Download to `data/raw/access_now_keepiton_2026-05-20.csv` (raw, gitignored). Load with pandas, do a quick `df.info()` + `df.head()` sanity print, then write to `data/processed/access_now_snapshot_2026-05-20.parquet` (committed). Record the source URL and access date in a short `data/processed/SNAPSHOTS.md`.
+8. Stub `src/internet_shutdowns/data.py` with one function signature: `load_access_now_snapshot(date: str = "2026-05-20") -> pd.DataFrame` that reads the committed parquet. Confirm it loads.
+9. Update `tests/test_smoke.py` template stubs to one real test: `test_access_now_snapshot_loads` — asserts non-empty DataFrame and presence of expected core columns (country, start_date, end_date, type — exact names confirmed after step 7).
+10. Run `pytest tests/ -q`. Commit everything as one scaffold commit.
+
+### Completion criteria
+
+- [ ] `pip install -e ".[viz,geo]"` succeeds in `portfolio` env
+- [ ] `import internet_shutdowns` works
+- [ ] `data/processed/access_now_snapshot_2026-05-20.parquet` exists and is committed
+- [ ] `data/processed/SNAPSHOTS.md` records source URL + access date
+- [ ] `pytest tests/ -q` passes (1 test green)
+- [ ] One commit on `main` with the scaffold
+
+### Handoff notes
+
+_[Fill during execution: actual column names in Access Now data, any surprises in the registry format, row count of snapshot.]_
+
+---
+
+## Session 2: Data loaders + remaining snapshots
+
+**Objective:** Implement the remaining four loaders (Top10VPN manual-CSV ingest, World Bank API with `requests-cache`, GADM country polygons) and produce the dated Top10VPN snapshot.
+**Inputs:** Session 1 scaffold + Access Now snapshot. User-supplied `data/raw/top10vpn_<year>.csv` files transcribed manually from the annual reports (one CSV per year 2019–2025).
+**Outputs:** Fleshed-out `src/internet_shutdowns/data.py` (4 loaders + a unified `load_all()`), `data/processed/top10vpn_snapshot_2026-05-20.parquet`, `data/raw/gadm_world_admin0.gpkg`, `data/cache/` sqlite cache, two more smoke tests.
+**Depends on:** Session 1.
+
+### Context for resumption
+
+Scaffold is in place; Access Now snapshot loads via `load_access_now_snapshot()`. Now wire the other three sources. Top10VPN has no API and no clean machine-readable feed — the user will hand-transcribe each year's country-level table from the annual HTML report into `data/raw/top10vpn_<year>.csv` (columns: `country`, `cost_usd`, `duration_hours`, `users_affected`, `year`). World Bank uses the public indicators API; cache aggressively because indicators are stable. GADM 4.1 country boundaries are a one-time ~50MB download.
+
+### Steps
+
+1. **Top10VPN ingest.** Implement `load_top10vpn_csvs(raw_dir="data/raw") -> pd.DataFrame` that globs `top10vpn_*.csv`, concatenates, standardizes country names (use `pycountry` if needed — add to deps), and returns long-form `country × year × {cost_usd, duration_hours, users_affected}`. **Before coding: confirm with user that the CSV files exist; if not, write the loader and a one-page `data/raw/TOP10VPN_INGEST_GUIDE.md` documenting the expected schema, then stop and ask user to populate.**
+2. Snapshot Top10VPN: `df_top10vpn.to_parquet("data/processed/top10vpn_snapshot_2026-05-20.parquet")`. Append entry to `SNAPSHOTS.md`.
+3. **World Bank loader.** Implement `load_worldbank_indicators(indicators=["NY.GDP.MKTP.CD", "IT.NET.USER.ZS", "SP.POP.TOTL"], years=range(2019, 2026)) -> pd.DataFrame` using `requests` + `requests-cache` (sqlite at `data/cache/wb_cache.sqlite`, TTL 30 days). Returns long-form `country × year × indicator × value`. Use the v2 JSON endpoint, paginate, handle nulls.
+4. **GADM loader.** Implement `load_gadm_countries(level=0) -> geopandas.GeoDataFrame`. One-time fetch of `gadm_410-levels.gpkg` is heavy — instead use the per-level world file (`gadm_world_admin0.gpkg`, ~50MB). Cache to `data/raw/` (gitignored — too large to commit). Document size in `SNAPSHOTS.md` and add a fetch helper rather than committing the file.
+5. Add `load_all()` convenience that returns a dict `{"shutdowns", "costs", "wb", "boundaries"}`.
+6. Smoke tests: `test_top10vpn_snapshot_loads`, `test_worldbank_cached_call_returns_data` (mock-friendly — assert non-empty for one country/year), `test_gadm_loads` (skip if file absent with a clear message).
+7. Run `pytest -q`. Commit.
+
+### Completion criteria
+
+- [ ] All four loaders importable and callable
+- [ ] `data/processed/top10vpn_snapshot_2026-05-20.parquet` committed (if CSVs supplied) OR clear `TOP10VPN_INGEST_GUIDE.md` waiting for user
+- [ ] `data/cache/wb_cache.sqlite` populated on first run
+- [ ] `SNAPSHOTS.md` has entries for all three snapshots
+- [ ] All smoke tests pass
+- [ ] One commit
+
+### Handoff notes
+
+_[Fill during execution: any country-name reconciliation surprises between Access Now / Top10VPN / WB / GADM, WB indicator codes if changed, GADM download URL.]_
+
+---
+
+## Session 3: Cleaning module + dedup decision + duration imputation decision
+
+**Objective:** Build `src/internet_shutdowns/clean.py` and execute the first two five-part decision blocks (deduplication, duration imputation) inline in `notebooks/02_main.ipynb`.
+**Inputs:** Snapshots from S1+S2, `diagnostics.py` helpers, `NOTEBOOK_STRUCTURE.md` template.
+**Outputs:** `src/internet_shutdowns/clean.py` (3 functions: `dedupe_events`, `compute_duration`, `standardize_event_columns`), `notebooks/02_main.ipynb` with sections §1 (load), §2 (standardize), §3 (dedup decision block), §4 (duration imputation decision block), populated rows in README decisions table for these two decisions.
+**Depends on:** S2.
+
+### Context for resumption
+
+Loaders work. Now do the lab work. CLAUDE.md explains both decisions in detail: dedup rule starts with `country + start_date within ±N days + type match`, tune N against a ~30-case probe set, document false-merge and unmerged-duplicate rates. Duration imputation has four options to evaluate (drop / snapshot-date / 30-day ceiling / carry-as-missing-with-flag). Each decision **must** be presented in five parts: problem → diagnostic code → 2–3 named options → decision + rationale → sensitivity check. Diagnostics helpers (`missingness_summary`, `missingness_pattern`, `distribution_compare`, `before_after`, `compare_alternatives`) live in `src/internet_shutdowns/diagnostics.py`.
+
+### Steps
+
+1. Create `notebooks/02_main.ipynb` from `NOTEBOOK_STRUCTURE.md` template. Add the project's title, the methodology caveat banner cell, and table-of-contents cell.
+2. §1 Load: call `load_access_now_snapshot()` + `load_top10vpn_csvs()` + `load_worldbank_indicators()`.
+3. §2 Standardize: implement `standardize_event_columns(df)` — canonical column names, ISO-3 country codes, parsed dates, type as ordered categorical (`full_blackout` / `throttle` / `platform_block`).
+4. §3 **Decision block: deduplication.** Run `missingness_summary` + value-counts on `(country, start_date, type)` triples to find clusters. Code dedup at N ∈ {0, 1, 3, 7} days and report merge counts via `compare_alternatives`. Hand-spot-check ~30 borderline cases. Decide N. Implement final `dedupe_events(df, days_tolerance=N)`. Sensitivity: re-run with N±2 and report headline metric drift.
+5. §4 **Decision block: duration imputation.** Diagnose: what fraction of rows are missing `end_date`? Of those, what fraction are "ongoing" vs. simply unrecorded? `distribution_compare` of known-duration events. Implement `compute_duration(df, missing_strategy="...")`. Sensitivity: re-run cost rollup (placeholder — actual rollup in S4) under each strategy, report top-10-country ranking stability.
+6. Populate README decisions table rows for these two decisions (fill in `Chose` + `Why` + `Sensitivity` columns).
+7. Add smoke tests: `test_dedupe_collapses_known_duplicates`, `test_compute_duration_handles_missing_end_date`.
+8. Run notebook top-to-bottom, run pytest, commit.
+
+### Completion criteria
+
+- [ ] `notebooks/02_main.ipynb` §§1–4 runs top-to-bottom without error
+- [ ] Both decision blocks contain real diagnostic output (not placeholder text)
+- [ ] README decisions table rows 1 and 2 populated
+- [ ] `clean.py` exports tested and importable
+- [ ] One commit
+
+### Handoff notes
+
+_[Fill during execution: chosen N for dedup, chosen duration imputation strategy, row count before/after dedup, fraction of events with imputed duration.]_
+
+---
+
+## Session 4: Cost join + WB normalization + country grouping + platform-block decisions
+
+**Objective:** Build the analytic dataset by joining costs and macro indicators, and execute decision blocks 3–5 (cost source choice, country grouping, platform-block treatment). Decision 6 (snapshot pinning) is documented based on the work already done in S1–S2.
+**Inputs:** Cleaned event dataset from S3, Top10VPN + WB snapshots from S2.
+**Outputs:** `notebooks/02_main.ipynb` §§5–9 (cost join, WB norm, decision blocks for cost source / country grouping / platform-block treatment / snapshot pinning), `data/processed/analytic_dataset_2026-05-20.parquet`, 4 more populated rows in README decisions table.
+**Depends on:** S3.
+
+### Context for resumption
+
+Cleaned event dataset exists at the end of S3 (`notebooks/02_main.ipynb` §§1–4 produces it). Now layer cost + macro and execute the four remaining decisions. **Top10VPN methodology caveat is load-bearing**: the cost-source decision block (decision #3) is where the methodology debate lives — cite Top10VPN's methodology page AND at least one critical secondary source, present the debate honestly, choose Top10VPN as primary for cross-country comparability while documenting the limitation. Country grouping (#4) has three named options (WB income group / UN LDC / custom regional) — each gives a different LMIC ranking. Platform-block treatment (#5) per CLAUDE.md: present both views (combined as headline + separated in drill-down).
+
+### Steps
+
+1. §5 Cost join: outer join cleaned events ↔ Top10VPN cost on `(iso3, year)`. Diagnose join completeness.
+2. §6 WB normalization: join WB indicators on `(iso3, year)`. Compute `cost_pct_gdp = cost_usd / gdp_usd` and `cost_per_internet_user`.
+3. §7 **Decision block: cost source choice.** Surface the methodology debate explicitly. Diagnostic: compare Top10VPN figures vs. any academic alternates available for 2–3 well-studied cases (Iran 2019, Sudan 2019, India Kashmir 2019–2020). Decide: Top10VPN as primary, alternates cited where they exist, methodology caveat printed in every figure title.
+4. §8 **Decision block: country grouping.** Compute top-10 cost ranking under WB income group / UN LDC / custom-regional framings. Diagnostic: rank-correlation across the three. Decide one as headline, note others in robustness notebook.
+5. §9 **Decision block: platform-block treatment.** Diagnostic: what share of shutdown-days are full vs. throttle vs. platform-block? Per-country totals under combined vs. separated counting. Decision: combined as headline view, separated in country drill-down. Implement a `view: Literal["combined","separated"]` parameter on the rollup helper.
+6. §10 **Decision block: snapshot pinning.** Mostly retrospective — the snapshots already exist from S1+S2; document the *why* and add a revision-magnitude diagnostic placeholder (will be runnable next time a fresh snapshot is taken).
+7. Persist final analytic dataset: `df_analytic.to_parquet("data/processed/analytic_dataset_2026-05-20.parquet")`.
+8. Populate README decisions table rows 3–6.
+9. Run notebook top-to-bottom, commit.
+
+### Completion criteria
+
+- [ ] `notebooks/02_main.ipynb` §§1–10 runs top-to-bottom
+- [ ] `data/processed/analytic_dataset_2026-05-20.parquet` exists, committed
+- [ ] All 6 README decisions table rows populated
+- [ ] Cost-source block contains real citation to ≥1 secondary critical source
+- [ ] One commit
+
+### Handoff notes
+
+_[Fill during execution: chosen country grouping, chosen primary cost source, headline top-10 list (used in S5 hero figure), share of events by type.]_
+
+---
+
+## Session 5: Viz module + hero figure
+
+**Objective:** Build `src/internet_shutdowns/viz.py` with reusable Plotly helpers and export the static `figures/hero.png` (top-10 countries by total estimated shutdown cost, with methodology caveat in the title).
+**Inputs:** `data/processed/analytic_dataset_2026-05-20.parquet` from S4.
+**Outputs:** `src/internet_shutdowns/viz.py` (3 functions: `world_choropleth`, `time_series`, `top10_bar`), `figures/hero.png`, `notebooks/02_main.ipynb` §11 (viz showcase), 1 smoke test.
+**Depends on:** S4.
+
+### Context for resumption
+
+Analytic dataset is finalized at `data/processed/analytic_dataset_2026-05-20.parquet`. Viz library is Plotly (justified in CLAUDE.md: dashboard depends on hover + click-through). Hero constraint: top-10 chart must read at ~800×800 LinkedIn thumbnail size and the methodology caveat in the title must remain legible at that size. Same viz helpers will power S6 dashboard — don't build two parallel viz pipelines.
+
+### Steps
+
+1. `world_choropleth(df, metric="total_shutdown_days" | "total_cost_usd", year_range=None) -> plotly.Figure`. Use GADM polygons if a real geo overlay is needed; default to Plotly's built-in country layer (cheaper, no GADM dep at viz time).
+2. `time_series(df, freq="M", metric="event_count" | "cumulative_cost") -> plotly.Figure`.
+3. `top10_bar(df, metric="total_cost_usd", caveat_in_title=True) -> plotly.Figure`. Title: `"Top 10 countries by estimated shutdown cost, 2019–2025 (Top10VPN methodology — see limitations)"`. Confirm legibility at 800×800.
+4. §11 in notebook: render all three figures inline.
+5. Static export: `plotly.io.write_image(fig, "figures/hero.png", width=800, height=800, scale=2)`. Requires `kaleido` (already in viz extras).
+6. Smoke test: `test_top10_bar_renders_with_caveat` — asserts caveat substring is in figure title.
+7. Commit `hero.png` + viz module.
+
+### Completion criteria
+
+- [ ] `figures/hero.png` exists, committed, legible at 800×800
+- [ ] Methodology caveat visible in hero title
+- [ ] Three viz helpers callable from notebook and (later) Streamlit
+- [ ] Smoke test passes
+- [ ] One commit
+
+### Handoff notes
+
+_[Fill during execution: any rendering issues with kaleido on Windows, final hero composition.]_
+
+---
+
+## Session 6: Streamlit dashboard
+
+**Objective:** Build the headline interactive deliverable: world map + country drill-down + time series in a single Streamlit app.
+**Inputs:** `data/processed/analytic_dataset_2026-05-20.parquet`, viz helpers from S5.
+**Outputs:** Fully implemented `app/streamlit_dashboard.py`, screenshot at `figures/dashboard_screenshot.png`.
+**Depends on:** S5.
+
+### Context for resumption
+
+Viz helpers exist. Dashboard reuses them — do not duplicate. Layout per CLAUDE.md: sidebar with year-range + country + view-mode (combined/separated) filters; main pane has tabs `World Map` / `Country Drill-down` / `Time Series` / `Top 10`. Country drill-down should show the per-event timeline for the selected country with event-level details on hover. Methodology caveat must appear as a persistent banner at the top, not buried in a footer.
+
+### Steps
+
+1. Sidebar controls: year-range slider (2019–latest), country multi-select, view-mode toggle (combined/separated per S4 decision).
+2. Persistent banner cell with the Top10VPN methodology caveat.
+3. Tab 1: `world_choropleth` driven by sidebar.
+4. Tab 2: country drill-down — event timeline (Plotly Gantt-style) + table of events with details.
+5. Tab 3: `time_series` (monthly count + cumulative cost — toggleable).
+6. Tab 4: `top10_bar` (the same hero figure, interactive).
+7. Run with `streamlit run app/streamlit_dashboard.py` in `portfolio` env. Take a screenshot of the World Map tab with a representative filter applied, save to `figures/dashboard_screenshot.png`.
+8. Reference the screenshot from README's "How to reproduce" section.
+9. Commit.
+
+### Completion criteria
+
+- [ ] Dashboard launches via `streamlit run` without error
+- [ ] All four tabs render with real data
+- [ ] Methodology caveat banner visible without scrolling
+- [ ] `figures/dashboard_screenshot.png` committed
+- [ ] One commit
+
+### Handoff notes
+
+_[Fill during execution: streamlit version installed, any deprecation warnings, perf observations.]_
+
+---
+
+## Session 7: README fill-in + smoke tests + robustness notebook + reproducibility check
+
+**Objective:** Finalize the deliverable — populate README with findings + limitations, complete the smoke test suite, write `notebooks/03_robustness.ipynb`, and run a clean reproducibility check.
+**Inputs:** Everything from S1–S6.
+**Outputs:** Filled-in `README.md` (Findings, Limitations, decisions table rationale prose, run-time number), `tests/test_smoke.py` (full coverage of loaders + clean + viz), `notebooks/03_robustness.ipynb`, `REPRODUCIBILITY.md` log of the clean re-run.
+**Depends on:** S5 (S6 can be parallel).
+
+### Context for resumption
+
+All upstream work done. This session is the "ship it" pass. Findings come from the analytic dataset and must be **falsifiable statements anchored to specific numbers** (e.g., "Country X: Y total shutdown-days 2019–2025, estimated cost Z USD per Top10VPN methodology"). Limitations section must explicitly name the Top10VPN methodology debate as a **limitation, not a finding**. Robustness notebook covers: dedup-N sensitivity, alternate duration imputation, alternate country grouping (each of these decisions was made in S3–S4 with sensitivity placeholders — now elaborate).
+
+### Steps
+
+1. Populate README Findings: ≥3 numeric statements anchored to analytic dataset values, each cost statement tagged with the methodology caveat.
+2. Populate README Limitations: Top10VPN methodology debate (most prominent), Access Now reporting bias, definitional drift across sources, WB data quality, "trend in counts is partly trend in reporting".
+3. Fill the rationale prose in each row of the README decisions table (cross-link to the notebook section).
+4. Complete `tests/test_smoke.py`: loader tests, clean tests, viz title test, end-to-end test that loads analytic dataset and asserts non-empty + expected columns.
+5. Build `notebooks/03_robustness.ipynb`: re-run dedup at N±2/±5, re-run duration imputation under all four strategies, re-run top-10 ranking under WB income group / UN LDC / custom-regional. For each, report the rank-correlation or magnitude drift.
+6. **Reproducibility check.** Fresh terminal: `pip install -e ".[viz,geo]"`, run `pytest -q`, run notebook 02 top-to-bottom (record wall-clock), launch dashboard. Log result in `REPRODUCIBILITY.md` with the wall-clock number. Update README's "Full run time: ~X minutes" placeholder.
+7. Final commit. Optionally tag `v0.1.0`.
+
+### Completion criteria
+
+- [ ] README Findings + Limitations sections populated with real numbers + prose
+- [ ] All 6 decisions table rows have real `Chose` + `Why` + `Sensitivity` content
+- [ ] `pytest -q` green (≥8 tests)
+- [ ] `notebooks/03_robustness.ipynb` runs top-to-bottom
+- [ ] `REPRODUCIBILITY.md` records the clean re-run wall-clock
+- [ ] Final commit on `main`
+
+### Handoff notes
+
+_[Fill during execution: final run-time, any reproducibility surprises, things deferred to a v0.2.]_
+
+---
+
+## Decision & Change Log
+
+Track decisions made during execution that affect later sessions.
+
+| # | Session | Decision | Affects |
+|---|---------|----------|---------|
+|   |         |          |         |
+
+## Progress Tracker
+
+| Session | Title | Status | Date | Notes |
+|---------|-------|--------|------|-------|
+| 1 | Scaffold + Access Now snapshot fetch | Not started | | |
+| 2 | Data loaders + remaining snapshots | Not started | | |
+| 3 | Cleaning + dedup decision + duration imputation decision | Not started | | |
+| 4 | Cost join + WB normalize + country grouping + platform-block decisions | Not started | | |
+| 5 | Viz module + hero figure | Not started | | |
+| 6 | Streamlit dashboard | Not started | | |
+| 7 | README fill-in + smoke tests + robustness notebook + reproducibility | Not started | | |
