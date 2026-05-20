@@ -178,6 +178,33 @@ def test_compute_duration_handles_missing_end_date():
     assert drop_total < hybrid_total < snap_total
 
 
+def test_top10_bar_renders_with_caveat():
+    """The hero figure surfaces the Top10VPN methodology caveat in its title.
+
+    Cost figures are reported, not endorsed (CLAUDE.md "Done definition"). The
+    caveat must travel with the figure — including the static `figures/hero.png`
+    export — even if the dashboard banner repeats it.
+    """
+    import pandas as pd
+
+    from internet_shutdowns.data import PROCESSED_DIR
+    from internet_shutdowns.viz import METHODOLOGY_CAVEAT, top10_bar
+
+    analytic = PROCESSED_DIR / "analytic_dataset_2026-05-20.parquet"
+    if not analytic.exists():
+        import pytest
+
+        pytest.skip(f"analytic dataset not built — expected {analytic}")
+
+    df = pd.read_parquet(analytic)
+    fig = top10_bar(df, metric="total_cost_usd")
+
+    title = fig.layout.title.text
+    assert METHODOLOGY_CAVEAT in title, f"caveat missing from title: {title!r}"
+    # 10 bars on a horizontal bar chart.
+    assert len(fig.data[0].y) == 10
+
+
 def test_gadm_loads():
     """GADM admin-0 polygons load — skipped if the (~50 MB) file isn't fetched."""
     import pytest
