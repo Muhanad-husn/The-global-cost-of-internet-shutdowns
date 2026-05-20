@@ -66,6 +66,10 @@ jupyter lab notebooks/02_main.ipynb
 streamlit run app/streamlit_dashboard.py
 ```
 
+The dashboard ships as the headline interactive deliverable: a persistent methodology-caveat banner above four tabs — World Map (choropleth by shutdown-days / estimated cost / event count), Country Drill-down (per-event Gantt timeline + detail table), Time Series (monthly counts + cumulative cost), and Top 10 (interactive hero ranking).
+
+![Dashboard screenshot](figures/dashboard_screenshot.png)
+
 Full run time: ~X minutes (most data is cached after first run via `requests-cache`; pinned snapshots are committed).
 
 ## Files
